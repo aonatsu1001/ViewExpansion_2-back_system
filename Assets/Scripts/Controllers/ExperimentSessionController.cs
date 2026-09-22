@@ -1,7 +1,7 @@
 using UnityEngine;
 
 // 「2-back 3回答ごとにロック発生」「8エリア完了で本試行終了」を管理する状態機械．
-// 練習：2-back 1ブロック(3回答) → エリア確認×1 → 実験者操作待ち
+// 練習：2-back 1ブロック(3回答) → エリア確認×1 → 2-back 1ブロック(3回答) → 実験者操作待ち
 // 本試行：(2-back 3回答 → ロック解除) を8エリア分繰り返して終了
 // 2-back系列はロックをまたいで連続する（ロック前後で比較対象がリセットされない）．
 public class ExperimentSessionController : MonoBehaviour
@@ -15,13 +15,12 @@ public class ExperimentSessionController : MonoBehaviour
     [HideInInspector] public LockTaskController lockTask;
     [HideInInspector] public SequenceSetLibrary sequenceLibrary;
 
-    private const int PracticeLockCount = 1;
-
     private enum Phase
     {
         Idle,
         PracticeTwoBack,
         PracticeLock,
+        PracticeTwoBackAfterLock,
         WaitForMainStart,
         MainTwoBack,
         MainLock,
@@ -30,7 +29,6 @@ public class ExperimentSessionController : MonoBehaviour
 
     private Phase phase = Phase.Idle;
     private int mainAreaIndex;
-    private int practiceLockIndex;
     private SequenceSetLibrary.SequenceSet activeSequence;
 
     // フィールド代入完了後にBootstrapから明示的に呼び出す（Awake時点では
@@ -73,9 +71,17 @@ public class ExperimentSessionController : MonoBehaviour
         if (phase == Phase.PracticeTwoBack)
         {
             twoBackPanel.SetActive(false);
-            practiceLockIndex = 0;
             phase = Phase.PracticeLock;
-            BeginNextPracticeLock();
+            lockPanel.SetActive(true);
+            int areaId = activeSequence.areaVisitOrder[0];
+            lockTask.BeginTrial(trialIndex: 0, areaId, isPractice: true);
+        }
+        else if (phase == Phase.PracticeTwoBackAfterLock)
+        {
+            twoBackPanel.SetActive(false);
+            ExperimentLogger.Instance?.FlushPractice();
+            phase = Phase.WaitForMainStart;
+            practiceTransitionPanel.SetActive(true);
         }
         else if (phase == Phase.MainTwoBack)
         {
@@ -87,29 +93,14 @@ public class ExperimentSessionController : MonoBehaviour
         }
     }
 
-    private void BeginNextPracticeLock()
-    {
-        if (practiceLockIndex >= PracticeLockCount)
-        {
-            lockPanel.SetActive(false);
-            ExperimentLogger.Instance?.FlushPractice();
-            phase = Phase.WaitForMainStart;
-            practiceTransitionPanel.SetActive(true);
-            return;
-        }
-
-        lockPanel.SetActive(true);
-        int areaId = activeSequence.areaVisitOrder[practiceLockIndex % activeSequence.areaVisitOrder.Length];
-        lockTask.BeginTrial(practiceLockIndex, areaId, isPractice: true);
-    }
-
     private void HandleLockComplete()
     {
         if (phase == Phase.PracticeLock)
         {
             lockPanel.SetActive(false);
-            practiceLockIndex++;
-            BeginNextPracticeLock();
+            phase = Phase.PracticeTwoBackAfterLock;
+            twoBackPanel.SetActive(true);
+            twoBack.StartBlock(trialAreaIndex: -1, isPractice: true);
         }
         else if (phase == Phase.MainLock)
         {
