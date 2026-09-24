@@ -117,6 +117,50 @@ H1（3×8試行全体の完了時間）をCSVから再計算しなくて済む�
 
 - 既存の`EvaluationManager.cs`のCSV書き出しパターン（`List<string>`に蓄積 → `File.WriteAllLines`，UTF8）を踏襲してよい．
 - 出力先は`Application.persistentDataPath`よりも，実験者が回収しやすい場所（exe横のフォルダ，またはInspectorで指定可能なパス）を推奨．
+- 実装上の出力先：`Application.dataPath`の親ディレクトリ直下の`Logs`フォルダ（Editor実行時はプロジェクト直下，ビルド後はexeと同階層）．`.gitignore`で除外済み．
+
+### 各列の詳細（実装ベース）
+
+**`participantID`はCSVの列としては存在しない．ファイル名の先頭部分がそのまま参加者IDである点に注意．**
+
+#### `..._twoback.csv` / `..._practice_twoback.csv`
+
+| 列名 | 内容 |
+|---|---|
+| Timestamp | 参加者が「Same/Different」をクリックした瞬間の時刻（Unixエポックからのミリ秒，ローカル時刻基準）．数字が表示された瞬間ではなく回答した瞬間の時刻 |
+| Digit | このトライアルで表示された数字（1〜9） |
+| TargetDigit | 比較対象（NBackDistance個前に表示された数字）．N=1なら1つ前，N=2なら2つ前の数字 |
+| UserAnswer | クリックした内容．`Same`または`Different`（タイムアウト仕様は廃止済みのため`NoResponse`は出力されない） |
+| Correct | 正誤（True/False）．DigitとTargetDigitが実際に同じかどうかとUserAnswerが一致していればTrue |
+| ReactionTimeMs | 数字が表示されてからクリックするまでの反応時間（ミリ秒）．ゲーム内の高精度タイマー基準で，Timestampとは別系統の計測値 |
+| TrialAreaIndex | この試行が何番目のエリア訪問ブロックで起きたか（0〜7）．**物理的なエリア番号（AreaId）ではなく，訪問順のインデックス**．練習中は常に`-1` |
+
+#### `..._lock.csv` / `..._practice_lock.csv`
+
+| 列名 | 内容 |
+|---|---|
+| TrialIndex | 何番目のロック解除タスクか（0〜7，訪問順インデックス）．練習中は常に`0` |
+| AreaId | 実際にチェックした物理的なエリア番号（0始まり．画面表示は`AreaId+1`）．物理カラーカードの配置と対応 |
+| TargetColorIndex | そのエリアの正解色（`AreaColorConfig`のパレット内インデックス，既定は0=Red,1=Blue,2=Green,3=Yellow,4=Purple,5=Orange,6=Cyan,7=Pink） |
+| AnsweredColorIndex | 参加者がクリックした色のパレットインデックス |
+| Correct | AnsweredColorIndexとTargetColorIndexが一致すればTrue |
+| LockOnsetTimestampMs | ロックが発生し「Please check Area N」が表示された瞬間の時刻（ミリ秒） |
+| AnswerTimestampMs | この行のクリックが行われた瞬間の時刻（ミリ秒） |
+| ResponseTimeMs | ロック発生からこのクリックまでの経過時間（ミリ秒）．前回の誤答からではなく，常にロック開始時点からの累積時間 |
+
+**正解するまでロックは解除されない仕様のため，誤答すると同じTrialIndex/AreaIdのまま複数行記録される**（AnsweredColorIndexとCorrectだけが変わる）．実際の解除所要時間は，そのTrialIndexで`Correct=True`になっている行の`ResponseTimeMs`を見る．
+
+#### `..._session.csv`（本試行のみ，1行のみ）
+
+| 列名 | 内容 |
+|---|---|
+| SessionStartMs | 「Start Main Trial」ボタンを押した瞬間の時刻（ミリ秒） |
+| SessionEndMs | 8エリア目のロック解除が完了した瞬間の時刻（ミリ秒） |
+| TotalDurationMs | SessionEndMs − SessionStartMs．H1（3×8試行全体の完了時間）そのもの |
+
+#### 補足：TrialAreaIndex／TrialIndexと物理エリア番号の対応
+
+`twoback.csv`の`TrialAreaIndex`と`lock.csv`の`TrialIndex`は同じ意味（0〜7の訪問順インデックス）．実際の物理エリア番号に変換したい場合は，その参加者に割り当てた`SequenceSetLibrary`の`areaVisitOrder`配列を参照するか，同じ訪問順インデックスを持つ`lock.csv`の`AreaId`列と突き合わせる．
 
 ---
 

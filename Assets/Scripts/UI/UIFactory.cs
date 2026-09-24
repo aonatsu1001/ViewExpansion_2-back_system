@@ -67,7 +67,7 @@ public static class UIFactory
         return tmp;
     }
 
-    public static Button CreateButton(Transform parent, string label, TMP_FontAsset font, UnityAction onClick, Vector2 size, Color? bg = null, Color? textColor = null)
+    public static Button CreateButton(Transform parent, string label, TMP_FontAsset font, UnityAction onClick, Vector2 size, Color? bg = null, Color? textColor = null, int fontSize = 28, bool showLabel = true)
     {
         var go = new GameObject(label + "Button", typeof(RectTransform), typeof(Image), typeof(Button));
         go.transform.SetParent(parent, false);
@@ -85,14 +85,17 @@ public static class UIFactory
         var btn = go.GetComponent<Button>();
         if (onClick != null) btn.onClick.AddListener(onClick);
 
-        var text = CreateText(go.transform, label, 28, font, textColor ?? Color.white);
-        var textLe = text.GetComponent<LayoutElement>();
-        if (textLe != null) Object.Destroy(textLe);
-        var trect = text.GetComponent<RectTransform>();
-        trect.anchorMin = Vector2.zero;
-        trect.anchorMax = Vector2.one;
-        trect.offsetMin = Vector2.zero;
-        trect.offsetMax = Vector2.zero;
+        if (showLabel)
+        {
+            var text = CreateText(go.transform, label, fontSize, font, textColor ?? Color.white);
+            var textLe = text.GetComponent<LayoutElement>();
+            if (textLe != null) Object.Destroy(textLe);
+            var trect = text.GetComponent<RectTransform>();
+            trect.anchorMin = Vector2.zero;
+            trect.anchorMax = Vector2.one;
+            trect.offsetMin = Vector2.zero;
+            trect.offsetMax = Vector2.zero;
+        }
 
         return btn;
     }
