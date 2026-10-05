@@ -104,7 +104,7 @@ HMD側プロジェクトで先行実装した経験を踏まえ，VR依存部分
 TrialIndex, AreaId, TargetColorIndex, AnsweredColorIndex, Correct, LockOnsetTimestampMs, AnswerTimestampMs, ResponseTimeMs
 ```
 
-### `..._twoback.csv`（24行＝3回答×8エリア）
+### `..._twoback.csv`（27行＝3回答×8エリア＋締めくくりブロック3回答，TrialAreaIndex=8）
 ```
 Timestamp, Digit, TargetDigit, UserAnswer, Correct, ReactionTimeMs, TrialAreaIndex
 ```

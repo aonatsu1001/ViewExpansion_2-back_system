@@ -2,7 +2,8 @@ using UnityEngine;
 
 // 「2-back 3回答ごとにロック発生」「8エリア完了で本試行終了」を管理する状態機械．
 // 練習：2-back 1ブロック(3回答) → エリア確認×1 → 2-back 1ブロック(3回答) → 実験者操作待ち
-// 本試行：(2-back 3回答 → ロック解除) を8エリア分繰り返して終了
+// 本試行：(2-back 3回答 → ロック解除) を8エリア分繰り返し，最後に2-back 2回答の
+// 締めくくりブロックを行ってから終了する．
 // 2-back系列はロックをまたいで連続する（ロック前後で比較対象がリセットされない）．
 public class ExperimentSessionController : MonoBehaviour
 {
@@ -15,6 +16,8 @@ public class ExperimentSessionController : MonoBehaviour
     [HideInInspector] public LockTaskController lockTask;
     [HideInInspector] public SequenceSetLibrary sequenceLibrary;
 
+    private const int ClosingTwoBackAnswerCount = 3;
+
     private enum Phase
     {
         Idle,
@@ -24,6 +27,7 @@ public class ExperimentSessionController : MonoBehaviour
         WaitForMainStart,
         MainTwoBack,
         MainLock,
+        MainClosingTwoBack,
         Finished
     }
 
@@ -91,6 +95,11 @@ public class ExperimentSessionController : MonoBehaviour
             int areaId = activeSequence.areaVisitOrder[mainAreaIndex];
             lockTask.BeginTrial(mainAreaIndex, areaId, isPractice: false);
         }
+        else if (phase == Phase.MainClosingTwoBack)
+        {
+            twoBackPanel.SetActive(false);
+            FinishMain();
+        }
     }
 
     private void HandleLockComplete()
@@ -109,7 +118,10 @@ public class ExperimentSessionController : MonoBehaviour
 
             if (mainAreaIndex >= activeSequence.areaVisitOrder.Length)
             {
-                FinishMain();
+                // 8エリア完了後，締めくくりとして2-backを2回答だけ追加してから終了する．
+                phase = Phase.MainClosingTwoBack;
+                twoBackPanel.SetActive(true);
+                twoBack.StartBlock(mainAreaIndex, isPractice: false, answerCount: ClosingTwoBackAnswerCount);
             }
             else
             {

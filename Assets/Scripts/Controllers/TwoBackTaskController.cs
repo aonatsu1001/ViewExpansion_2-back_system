@@ -12,7 +12,7 @@ using UnityEngine.UI;
 // それ以降は回答可能で，マウスボタン（同じ／異なる）で回答した時点で次の数字へ進む
 // （自己ペース＝マルチタスク全体のスループットを所要時間に反映させるため，固定間隔にはしない．
 // タイムアウトは設けず，回答があるまで無期限に待つ）．
-// 1ブロックにつき3回答．
+// 1ブロックにつき既定3回答（StartBlockのanswerCountで変更可）．
 public class TwoBackTaskController : MonoBehaviour
 {
     private const int AnswersPerBlock = 3;
@@ -58,16 +58,17 @@ public class TwoBackTaskController : MonoBehaviour
         fullSequence.Clear();
     }
 
-    public void StartBlock(int trialAreaIndex, bool isPractice)
+    // answerCountで1ブロックあたりの回答数を変更できる（例：8エリア完了後の締めくくりブロックは2回答のみ）．
+    public void StartBlock(int trialAreaIndex, bool isPractice, int answerCount = AnswersPerBlock)
     {
         this.trialAreaIndex = trialAreaIndex;
         this.isPractice = isPractice;
 
         // 系列が空（このセッションの最初のブロック）の場合のみ，比較対象を持たない
-        // 先頭NBackDistance桁を追加してから回答可能な3桁を続ける．2回目以降のブロックは
-        // 前のブロック（ロック前）の末尾NBackDistance桁がそのまま比較対象になるため3桁のみ追加する．
+        // 先頭NBackDistance桁を追加してから回答可能なanswerCount桁を続ける．2回目以降のブロックは
+        // 前のブロック（ロック前）の末尾NBackDistance桁がそのまま比較対象になるためanswerCount桁のみ追加する．
         int startIndex = fullSequence.Count;
-        int newDigitsCount = startIndex == 0 ? AnswersPerBlock + NBackDistance : AnswersPerBlock;
+        int newDigitsCount = startIndex == 0 ? answerCount + NBackDistance : answerCount;
         AppendDigits(newDigitsCount);
 
         SetAnswerButtonsInteractable(false);

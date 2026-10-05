@@ -184,8 +184,26 @@ public class Bootstrap : MonoBehaviour
 
         var instruction = UIFactory.CreateText(layout, "", 32, uiFont);
 
-        var areaIndicators = new List<Image>(new Image[8]);
-        BuildAreaSpatialMap(layout, areaIndicators);
+        // areaIndicatorGroups[areaId]には，そのエリアを表す全ての図（俯瞰図＋HMD画面図）の
+        // セルが入る．ロック時はグループ内の全セルを同時にハイライトする．
+        var areaIndicatorGroups = new List<List<Image>>();
+        for (int i = 0; i < 8; i++) areaIndicatorGroups.Add(new List<Image>());
+
+        var diagramsRow = new GameObject("Diagrams", typeof(RectTransform));
+        diagramsRow.transform.SetParent(layout, false);
+        var diagramsHl = diagramsRow.AddComponent<HorizontalLayoutGroup>();
+        diagramsHl.spacing = 40;
+        diagramsHl.childAlignment = TextAnchor.MiddleCenter;
+        diagramsHl.childForceExpandWidth = false;
+        diagramsHl.childForceExpandHeight = false;
+        diagramsHl.childControlWidth = true;
+        diagramsHl.childControlHeight = true;
+        var diagramsLe = diagramsRow.AddComponent<LayoutElement>();
+        diagramsLe.preferredWidth = 420 + 40 + 520;
+        diagramsLe.preferredHeight = 520;
+
+        BuildAreaSpatialMap(diagramsRow.transform, areaIndicatorGroups);
+        BuildHmdScreenDiagram(diagramsRow.transform, areaIndicatorGroups, lockTask);
 
         var grid = new GameObject("PaletteGrid", typeof(RectTransform));
         grid.transform.SetParent(layout, false);
@@ -208,7 +226,7 @@ public class Bootstrap : MonoBehaviour
         }
 
         lockTask.Bind(instruction, buttons, areaColorConfig);
-        lockTask.BindAreaMap(areaIndicators);
+        lockTask.BindAreaMap(areaIndicatorGroups);
     }
 
     // 「You」を中心としたドーナツ状の俯瞰図．正面は広い1つの扇形（視野内），
@@ -217,13 +235,16 @@ public class Bootstrap : MonoBehaviour
     // 独自メッシュに依存せず確実に表示される．
     // 角度は数学の慣例通り，0°=右，90°=真上（＝正面），180°=左とする．
     // 描画順：扇形（塗り）→境界線（扇形の上）→ラベル（一番上，常に読める）→中心のYou円．
-    private void BuildAreaSpatialMap(Transform parent, List<Image> indicatorsOut)
+    private void BuildAreaSpatialMap(Transform parent, List<List<Image>> indicatorGroups)
     {
-        const float youRadius = 65f;
-        const float innerBandOuterRadius = 175f;
-        const float outerBandOuterRadius = 290f;
+        const float youRadius = 47f;
+        const float innerBandOuterRadius = 127f;
+        const float outerBandOuterRadius = 210f;
         const float forwardHalfWidth = 40f; // 正面の扇は幅80°（50°〜130°）
-        const float sideHalfWidth = 70f;    // 左右各セルの扇は幅140°（上下で分割）
+        const float sideHalfWidth = 70f;    // 左右の合計角度（140°）の半分．隙間を含めた枠の大きさ
+        const float backGapHalfWidth = 32f; // Youの真後ろ（270°）に設ける隙間の半分（合計32°空ける）
+        // 隙間の分を上下で均等に差し引き，8エリアすべてを同じ幅にする．
+        const float cellWidth = sideHalfWidth - backGapHalfWidth / 2f;
 
         // 各セル位置に実際に割り当てるareaId（0始まり，表示番号は+1）．
         // 位置：Outer=Youから遠い／Inner=近い，Upper=正面寄り／Lower=背面寄り．
@@ -255,28 +276,30 @@ public class Bootstrap : MonoBehaviour
 
         float leftStart = 90f + forwardHalfWidth;
         float leftUpperStart = leftStart;
-        float leftLowerStart = leftStart + sideHalfWidth;
+        float leftLowerStart = leftStart + cellWidth;
         float rightStart = 90f - forwardHalfWidth - sideHalfWidth * 2f;
-        float rightLowerStart = rightStart;
-        float rightUpperStart = rightStart + sideHalfWidth;
+        float rightLowerStart = rightStart + backGapHalfWidth;
+        float rightUpperStart = rightLowerStart + cellWidth;
 
-        // 1. 扇形（塗り）．正面＋左右各4セル．
+        // 1. 扇形（塗り）．正面＋左右各4セル．8セルはすべて同じ幅(cellWidth)．
+        // 左のLowerセルの終端から右のLowerセルの始端までが隙間（backGapHalfWidth×2）になる．
         CreateRingWedge(mapContainer.transform, forwardRingSprite, outerBandOuterRadius * 2f, 90f - forwardHalfWidth, forwardHalfWidth * 2f, forwardColor);
 
-        indicatorsOut[leftOuterUpperAreaId] = CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, leftUpperStart, sideHalfWidth, peripheralDefaultColor);
-        indicatorsOut[leftInnerUpperAreaId] = CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, leftUpperStart, sideHalfWidth, peripheralDefaultColor);
-        indicatorsOut[leftOuterLowerAreaId] = CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, leftLowerStart, sideHalfWidth, peripheralDefaultColor);
-        indicatorsOut[leftInnerLowerAreaId] = CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, leftLowerStart, sideHalfWidth, peripheralDefaultColor);
+        indicatorGroups[leftOuterUpperAreaId].Add(CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, leftUpperStart, cellWidth, peripheralDefaultColor));
+        indicatorGroups[leftInnerUpperAreaId].Add(CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, leftUpperStart, cellWidth, peripheralDefaultColor));
+        indicatorGroups[leftOuterLowerAreaId].Add(CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, leftLowerStart, cellWidth, peripheralDefaultColor));
+        indicatorGroups[leftInnerLowerAreaId].Add(CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, leftLowerStart, cellWidth, peripheralDefaultColor));
 
-        indicatorsOut[rightOuterUpperAreaId] = CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, rightUpperStart, sideHalfWidth, peripheralDefaultColor);
-        indicatorsOut[rightInnerUpperAreaId] = CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, rightUpperStart, sideHalfWidth, peripheralDefaultColor);
-        indicatorsOut[rightOuterLowerAreaId] = CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, rightLowerStart, sideHalfWidth, peripheralDefaultColor);
-        indicatorsOut[rightInnerLowerAreaId] = CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, rightLowerStart, sideHalfWidth, peripheralDefaultColor);
+        indicatorGroups[rightOuterUpperAreaId].Add(CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, rightUpperStart, cellWidth, peripheralDefaultColor));
+        indicatorGroups[rightInnerUpperAreaId].Add(CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, rightUpperStart, cellWidth, peripheralDefaultColor));
+        indicatorGroups[rightOuterLowerAreaId].Add(CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, rightLowerStart, cellWidth, peripheralDefaultColor));
+        indicatorGroups[rightInnerLowerAreaId].Add(CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, rightLowerStart, cellWidth, peripheralDefaultColor));
 
-        // 2. 境界線．放射状の直線（5本：正面と左右，左右それぞれの上下境界，左右の境界）と，
-        // 内側/外側バンドの境界を示す円弧（左右それぞれ）．扇形の上に重ねて描く．
+        // 2. 境界線．放射状の直線（4本：正面と左右，左右それぞれの上下境界）と，
+        // 内側/外側バンドの境界を示す円弧（左右それぞれ，背面の隙間を避けて描く）．扇形の上に重ねて描く．
+        // 背面（270°）には隙間があるため，その位置には境界線を引かない．
         const float lineThickness = 5f;
-        foreach (var angle in new[] { 90f - forwardHalfWidth, 90f + forwardHalfWidth, leftLowerStart, 270f, rightUpperStart })
+        foreach (var angle in new[] { 90f - forwardHalfWidth, 90f + forwardHalfWidth, leftLowerStart, rightUpperStart })
         {
             CreateRadialBoundaryLine(mapContainer.transform, angle, youRadius, outerBandOuterRadius, lineThickness, boundaryColor);
         }
@@ -284,27 +307,28 @@ public class Bootstrap : MonoBehaviour
         const float bandBoundaryHalfThickness = 4f;
         float bandBoundaryDiameter = (innerBandOuterRadius + bandBoundaryHalfThickness) * 2f;
         var bandBoundarySprite = CreateRingSprite((innerBandOuterRadius - bandBoundaryHalfThickness) / (innerBandOuterRadius + bandBoundaryHalfThickness));
-        CreateRingWedge(mapContainer.transform, bandBoundarySprite, bandBoundaryDiameter, leftStart, sideHalfWidth * 2f, boundaryColor);
-        CreateRingWedge(mapContainer.transform, bandBoundarySprite, bandBoundaryDiameter, rightStart, sideHalfWidth * 2f, boundaryColor);
+        CreateRingWedge(mapContainer.transform, bandBoundarySprite, bandBoundaryDiameter, leftStart, cellWidth * 2f, boundaryColor);
+        CreateRingWedge(mapContainer.transform, bandBoundarySprite, bandBoundaryDiameter, rightLowerStart, cellWidth * 2f, boundaryColor);
 
         // 3. ラベル．境界線よりさらに上に描くことで，線に隠れず常に読めるようにする．
         // 表示番号は必ず「そのセルに実際に割り当てたareaId+1」から生成し，表示と実データがずれないようにする．
-        const int labelFontSize = 44;
-        var labelHolderSize = new Vector2(100, 70);
+        // HMD画面図のセル番号（26pt）に合わせる．
+        const int labelFontSize = 26;
+        var labelHolderSize = new Vector2(70, 50);
 
-        CreateWedgeLabel(mapContainer.transform, "Forward", (youRadius + outerBandOuterRadius) / 2f, 90f, labelFontSize, new Vector2(220, 70));
+        CreateWedgeLabel(mapContainer.transform, "Forward", (youRadius + outerBandOuterRadius) / 2f, 90f, labelFontSize, new Vector2(140, 50));
 
         float innerLabelRadius = (youRadius + innerBandOuterRadius) / 2f;
         float outerLabelRadius = (innerBandOuterRadius + outerBandOuterRadius) / 2f;
 
-        CreateWedgeLabel(mapContainer.transform, (leftOuterUpperAreaId + 1).ToString(), outerLabelRadius, leftUpperStart + sideHalfWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (leftInnerUpperAreaId + 1).ToString(), innerLabelRadius, leftUpperStart + sideHalfWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (leftOuterLowerAreaId + 1).ToString(), outerLabelRadius, leftLowerStart + sideHalfWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (leftInnerLowerAreaId + 1).ToString(), innerLabelRadius, leftLowerStart + sideHalfWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (rightOuterUpperAreaId + 1).ToString(), outerLabelRadius, rightUpperStart + sideHalfWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (rightInnerUpperAreaId + 1).ToString(), innerLabelRadius, rightUpperStart + sideHalfWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (rightOuterLowerAreaId + 1).ToString(), outerLabelRadius, rightLowerStart + sideHalfWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (rightInnerLowerAreaId + 1).ToString(), innerLabelRadius, rightLowerStart + sideHalfWidth / 2f, labelFontSize, labelHolderSize);
+        CreateWedgeLabel(mapContainer.transform, (leftOuterUpperAreaId + 1).ToString(), outerLabelRadius, leftUpperStart + cellWidth / 2f, labelFontSize, labelHolderSize);
+        CreateWedgeLabel(mapContainer.transform, (leftInnerUpperAreaId + 1).ToString(), innerLabelRadius, leftUpperStart + cellWidth / 2f, labelFontSize, labelHolderSize);
+        CreateWedgeLabel(mapContainer.transform, (leftOuterLowerAreaId + 1).ToString(), outerLabelRadius, leftLowerStart + cellWidth / 2f, labelFontSize, labelHolderSize);
+        CreateWedgeLabel(mapContainer.transform, (leftInnerLowerAreaId + 1).ToString(), innerLabelRadius, leftLowerStart + cellWidth / 2f, labelFontSize, labelHolderSize);
+        CreateWedgeLabel(mapContainer.transform, (rightOuterUpperAreaId + 1).ToString(), outerLabelRadius, rightUpperStart + cellWidth / 2f, labelFontSize, labelHolderSize);
+        CreateWedgeLabel(mapContainer.transform, (rightInnerUpperAreaId + 1).ToString(), innerLabelRadius, rightUpperStart + cellWidth / 2f, labelFontSize, labelHolderSize);
+        CreateWedgeLabel(mapContainer.transform, (rightOuterLowerAreaId + 1).ToString(), outerLabelRadius, rightLowerStart + cellWidth / 2f, labelFontSize, labelHolderSize);
+        CreateWedgeLabel(mapContainer.transform, (rightInnerLowerAreaId + 1).ToString(), innerLabelRadius, rightLowerStart + cellWidth / 2f, labelFontSize, labelHolderSize);
 
         // 4. 参加者（You）アイコン．周囲の扇形に合わせて円形にする（ラベルより上＝最前面）．
         var head = CreateMapChild(mapContainer.transform, "Head", Vector2.zero, new Vector2(youRadius * 2f, youRadius * 2f));
@@ -417,6 +441,105 @@ public class Bootstrap : MonoBehaviour
         rect.anchorMax = Vector2.one;
         rect.offsetMin = Vector2.zero;
         rect.offsetMax = Vector2.zero;
+    }
+
+    // HMD画面をそのまま模した図．画面の左上に左視野外映像（エリア1-4），右上に右視野外映像
+    // （エリア5-8）の2x2グリッドを重ねて表示する．俯瞰図（リング）と同じareaIdを
+    // indicatorGroupsに登録することで，同じエリアを両方の図で同時にハイライトできる．
+    private void BuildHmdScreenDiagram(Transform parent, List<List<Image>> indicatorGroups, LockTaskController lockTask)
+    {
+        const float screenWidth = 480f;
+        const float screenHeight = 300f;
+        const float cellSize = 70f;
+        const float cellSpacing = 8f;
+        const float marginFromEdge = 16f;
+
+        var column = new GameObject("HmdScreenDiagram", typeof(RectTransform));
+        column.transform.SetParent(parent, false);
+        var vl = column.AddComponent<VerticalLayoutGroup>();
+        vl.childAlignment = TextAnchor.MiddleCenter;
+        vl.spacing = 16;
+        vl.childControlWidth = true;
+        vl.childControlHeight = true;
+        vl.childForceExpandWidth = false;
+        vl.childForceExpandHeight = false;
+        var columnLe = column.AddComponent<LayoutElement>();
+        columnLe.preferredWidth = screenWidth + 40f;
+        columnLe.preferredHeight = screenHeight + 80f;
+
+        UIFactory.CreateText(column.transform, "HMD Screen", 24, uiFont, new Color(0.8f, 0.8f, 0.8f));
+
+        var frame = new GameObject("Frame", typeof(RectTransform), typeof(Image));
+        frame.transform.SetParent(column.transform, false);
+        frame.GetComponent<RectTransform>().sizeDelta = new Vector2(screenWidth, screenHeight);
+        var frameLe = frame.AddComponent<LayoutElement>();
+        frameLe.preferredWidth = screenWidth;
+        frameLe.preferredHeight = screenHeight;
+        frame.GetComponent<Image>().color = new Color(0.55f, 0.55f, 0.6f);
+
+        var inner = CreateMapChild(frame.transform, "Content", Vector2.zero, new Vector2(screenWidth - 12f, screenHeight - 12f));
+        inner.gameObject.AddComponent<Image>().color = new Color(0.08f, 0.08f, 0.1f);
+
+        float halfWidth = (screenWidth - 12f) / 2f;
+        float halfHeight = (screenHeight - 12f) / 2f;
+        float halfGrid = (cellSize * 2f + cellSpacing) / 2f;
+
+        // 縦位置はHMDスクリーンの中央（y=0）に揃え，横方向だけ左右に振り分ける．
+        var leftGridCenter = new Vector2(-halfWidth + marginFromEdge + halfGrid, 0f);
+        var rightGridCenter = new Vector2(halfWidth - marginFromEdge - halfGrid, 0f);
+
+        // 左視野外の映像（エリア1-4）：左上・右上・左下・右下の順．
+        var leftCells = CreatePeripheralGrid(inner, leftGridCenter, cellSize, cellSpacing, new[] { 0, 1, 2, 3 }, indicatorGroups);
+        // 右視野外の映像（エリア5-8）．左右の対応について指定が無かったため，左と同じ並び順で仮に割り当てる．
+        var rightCells = CreatePeripheralGrid(inner, rightGridCenter, cellSize, cellSpacing, new[] { 4, 5, 6, 7 }, indicatorGroups);
+
+        // 見るべきエリアが左右どちらかにある間，反対側のグリッドは非アクティブ（暗く）表示する．
+        lockTask.BindHmdScreenSides(leftCells, rightCells);
+    }
+
+    // centerPosを中心に，2x2のエリアアイコンをグリッド状に配置し，生成したセルの一覧を返す．
+    // areaIdsTLTRBLBRは左上・右上・左下・右下の順でareaIdを指定する．
+    private List<Image> CreatePeripheralGrid(Transform parent, Vector2 centerPos, float cellSize, float spacing, int[] areaIdsTLTRBLBR, List<List<Image>> indicatorGroups)
+    {
+        float gridSize = cellSize * 2f + spacing;
+        var gridHolder = CreateMapChild(parent, "PeripheralGrid", centerPos, new Vector2(gridSize, gridSize));
+
+        var gl = gridHolder.gameObject.AddComponent<GridLayoutGroup>();
+        gl.cellSize = new Vector2(cellSize, cellSize);
+        gl.spacing = new Vector2(spacing, spacing);
+        gl.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+        gl.constraintCount = 2;
+
+        var cells = new List<Image>();
+        for (int slot = 0; slot < areaIdsTLTRBLBR.Length; slot++)
+        {
+            int areaId = areaIdsTLTRBLBR[slot];
+            var cell = CreateScreenCell(gridHolder.transform, (areaId + 1).ToString(), new Vector2(cellSize, cellSize));
+            indicatorGroups[areaId].Add(cell);
+            cells.Add(cell);
+        }
+        return cells;
+    }
+
+    // HMD画面図用の単純な番号付きセル（クリック不可）．
+    private Image CreateScreenCell(Transform parent, string label, Vector2 size)
+    {
+        var go = new GameObject(label + "Cell", typeof(RectTransform), typeof(Image));
+        go.transform.SetParent(parent, false);
+
+        var rect = go.GetComponent<RectTransform>();
+        rect.sizeDelta = size;
+        var le = go.AddComponent<LayoutElement>();
+        le.preferredWidth = size.x;
+        le.preferredHeight = size.y;
+
+        var img = go.GetComponent<Image>();
+        img.color = new Color(0.3f, 0.3f, 0.35f);
+
+        var text = UIFactory.CreateText(go.transform, label, 26, uiFont, Color.white);
+        StretchLabel(text);
+
+        return img;
     }
 
     private void BuildPracticeTransitionPanel(Transform parent, ExperimentSessionController session)

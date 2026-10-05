@@ -5,19 +5,28 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-// ロック解除タスク．エリアマップ（8エリア分のアイコン）上で対象エリアをハイライトし，
-// 8色パレットからのマウス回答を受け付ける．
+// ロック解除タスク．エリアマップ（リング図＋HMD画面図，それぞれ8エリア分のアイコン）上で
+// 対象エリアをハイライトし，8色パレットからのマウス回答を受け付ける．
 // 正解の色を選ぶまでロックは解除されない（誤答時も1行ずつログを記録した上で再入力を待つ）．
 public class LockTaskController : MonoBehaviour
 {
     private static readonly Color InactiveIndicatorColor = new Color(0.28f, 0.28f, 0.32f);
     private static readonly Color ActiveIndicatorColor = new Color(0.9f, 0.1f, 0.1f);
-    private const float PulseScaleMax = 1.06f;
+    private static readonly Color DisabledScreenColor = new Color(0.04f, 0.04f, 0.05f, 1f);
+    // 割合(%)ではなく絶対ピクセル量で伸び幅を揃える．リング図は内側/外側でセルの半径が
+    // 大きく異なるため，同じ倍率を掛けると半径の小さいセルの伸びがほぼ見えなくなるため．
+    private const float PulseGrowthPixels = 10f;
     private const float PulseSpeed = 2f;
 
     private TextMeshProUGUI instructionText;
     private List<Button> paletteButtons;
-    private List<Image> areaIndicators;
+    // areaIndicatorGroups[areaId]には，そのエリアを表す全ての表示要素（リング図のセル，
+    // HMD画面図のセルなど）が入る．ハイライト時はグループ内の全要素を同時に変化させる．
+    private List<List<Image>> areaIndicatorGroups;
+    // HMD画面図の左視野外(エリア1-4)／右視野外(エリア5-8)のセル．見るべきエリアが
+    // 反対側にある間，使われていない側は非アクティブ（暗く）表示する．
+    private List<Image> hmdLeftCells;
+    private List<Image> hmdRightCells;
     private AreaColorConfig colorConfig;
 
     private int currentTrialIndex;
@@ -43,14 +52,24 @@ public class LockTaskController : MonoBehaviour
         }
     }
 
-    // areaIndicators[areaId]が，そのエリアを表すマップ上のアイコンに対応する．
-    public void BindAreaMap(List<Image> areaIndicators)
+    // areaIndicatorGroups[areaId]が，そのエリアを表す全ての表示要素（複数の図にまたがってもよい）に対応する．
+    public void BindAreaMap(List<List<Image>> areaIndicatorGroups)
     {
-        this.areaIndicators = areaIndicators;
-        foreach (var indicator in areaIndicators)
+        this.areaIndicatorGroups = areaIndicatorGroups;
+        foreach (var group in areaIndicatorGroups)
         {
-            indicator.color = InactiveIndicatorColor;
+            foreach (var indicator in group)
+            {
+                indicator.color = InactiveIndicatorColor;
+            }
         }
+    }
+
+    // HMD画面図の左右セル一覧を登録する．BindAreaMapとは独立に呼び出してよい．
+    public void BindHmdScreenSides(List<Image> leftCells, List<Image> rightCells)
+    {
+        hmdLeftCells = leftCells;
+        hmdRightCells = rightCells;
     }
 
     public void BeginTrial(int trialIndex, int areaId, bool isPractice)
@@ -71,30 +90,50 @@ public class LockTaskController : MonoBehaviour
 
     private void HighlightArea(int areaId)
     {
-        if (areaIndicators == null) return;
+        if (areaIndicatorGroups == null) return;
 
-        for (int i = 0; i < areaIndicators.Count; i++)
+        foreach (var group in areaIndicatorGroups)
         {
-            areaIndicators[i].color = InactiveIndicatorColor;
-            areaIndicators[i].rectTransform.localScale = Vector3.one;
+            foreach (var indicator in group)
+            {
+                indicator.color = InactiveIndicatorColor;
+                indicator.rectTransform.localScale = Vector3.one;
+            }
+        }
+
+        // HMD画面図：見るべきエリアが左(0-3)なら右側グリッドを，右(4-7)なら左側グリッドを
+        // 非アクティブ（暗く）表示する．上の全体リセットの後，対象ハイライトの前に適用する．
+        if (hmdLeftCells != null && hmdRightCells != null)
+        {
+            bool isLeftArea = areaId >= 0 && areaId < 4;
+            SetColor(isLeftArea ? hmdRightCells : hmdLeftCells, DisabledScreenColor);
         }
 
         if (pulseCoroutine != null) StopCoroutine(pulseCoroutine);
-        if (areaId >= 0 && areaId < areaIndicators.Count)
+        if (areaId >= 0 && areaId < areaIndicatorGroups.Count)
         {
-            areaIndicators[areaId].color = ActiveIndicatorColor;
-            pulseCoroutine = StartCoroutine(PulseIndicator(areaIndicators[areaId].rectTransform));
+            foreach (var indicator in areaIndicatorGroups[areaId])
+            {
+                indicator.color = ActiveIndicatorColor;
+            }
+            pulseCoroutine = StartCoroutine(PulseIndicatorGroup(areaIndicatorGroups[areaId]));
         }
     }
 
-    // 正解するまで対象エリアが拡大縮小を繰り返すようにして注意を引く．
-    private IEnumerator PulseIndicator(RectTransform target)
+    // 正解するまで対象エリアの全表示要素が拡大縮小を繰り返すようにして注意を引く．
+    // 各要素ごとの実寸（半径）からその場で必要な倍率を計算し，見た目の伸び幅（ピクセル数）を揃える．
+    private IEnumerator PulseIndicatorGroup(List<Image> group)
     {
         while (true)
         {
             float t = Mathf.PingPong(Time.time * PulseSpeed, 1f);
-            float scale = Mathf.Lerp(1f, PulseScaleMax, t);
-            target.localScale = Vector3.one * scale;
+            foreach (var indicator in group)
+            {
+                float halfSize = indicator.rectTransform.sizeDelta.x / 2f;
+                float maxScale = halfSize > 0f ? 1f + PulseGrowthPixels / halfSize : 1f;
+                float scale = Mathf.Lerp(1f, maxScale, t);
+                indicator.rectTransform.localScale = Vector3.one * scale;
+            }
             yield return null;
         }
     }
@@ -111,10 +150,13 @@ public class LockTaskController : MonoBehaviour
         {
             SetInteractable(false);
             if (pulseCoroutine != null) StopCoroutine(pulseCoroutine);
-            if (areaIndicators != null && currentAreaId < areaIndicators.Count)
+            if (areaIndicatorGroups != null && currentAreaId < areaIndicatorGroups.Count)
             {
-                areaIndicators[currentAreaId].color = InactiveIndicatorColor;
-                areaIndicators[currentAreaId].rectTransform.localScale = Vector3.one;
+                foreach (var indicator in areaIndicatorGroups[currentAreaId])
+                {
+                    indicator.color = InactiveIndicatorColor;
+                    indicator.rectTransform.localScale = Vector3.one;
+                }
             }
             OnTrialComplete?.Invoke();
         }
@@ -124,5 +166,10 @@ public class LockTaskController : MonoBehaviour
     private void SetInteractable(bool value)
     {
         foreach (var b in paletteButtons) b.interactable = value;
+    }
+
+    private static void SetColor(List<Image> images, Color color)
+    {
+        foreach (var image in images) image.color = color;
     }
 }
