@@ -184,8 +184,8 @@ public class Bootstrap : MonoBehaviour
 
         var instruction = UIFactory.CreateText(layout, "", 32, uiFont);
 
-        // areaIndicatorGroups[areaId]には，そのエリアを表す全ての図（俯瞰図＋HMD画面図）の
-        // セルが入る．ロック時はグループ内の全セルを同時にハイライトする．
+        // areaIndicatorGroups[areaId]には，そのエリアを表す全ての表示要素が入る．
+        // ロック時はグループ内の全要素を同時にハイライトする．
         var areaIndicatorGroups = new List<List<Image>>();
         for (int i = 0; i < 8; i++) areaIndicatorGroups.Add(new List<Image>());
 
@@ -199,11 +199,17 @@ public class Bootstrap : MonoBehaviour
         diagramsHl.childControlWidth = true;
         diagramsHl.childControlHeight = true;
         var diagramsLe = diagramsRow.AddComponent<LayoutElement>();
-        diagramsLe.preferredWidth = 420 + 40 + 520;
-        diagramsLe.preferredHeight = 520;
 
-        BuildAreaSpatialMap(diagramsRow.transform, areaIndicatorGroups);
-        BuildHmdScreenDiagram(diagramsRow.transform, areaIndicatorGroups, lockTask);
+        // 左の図：左視野外（平行四辺形，エリア1-4）・正面（FOV）・右視野外（平行四辺形，エリア5-8）．
+        // 暗くする処理は無し．
+        var roomViewSize = BuildRoomViewDiagram(diagramsRow.transform, areaIndicatorGroups);
+        // 右の図：HMD画面をそのまま模した図（コーナーに2x2グリッド）．見ていない側を暗くする．
+        var hmdScreenSize = BuildHmdScreenDiagram(diagramsRow.transform, areaIndicatorGroups, lockTask);
+
+        // 各図が実際に必要とするサイズの合計を確保する（固定値だと，図のサイズを変えたときに
+        // 2つの図が重なって干渉してしまうため，必ずここで計算し直す）．
+        diagramsLe.preferredWidth = roomViewSize.x + diagramsHl.spacing + hmdScreenSize.x;
+        diagramsLe.preferredHeight = Mathf.Max(roomViewSize.y, hmdScreenSize.y);
 
         var grid = new GameObject("PaletteGrid", typeof(RectTransform));
         grid.transform.SetParent(layout, false);
@@ -221,6 +227,7 @@ public class Bootstrap : MonoBehaviour
             foreach (var p in areaColorConfig.palette)
             {
                 var btn = UIFactory.CreateButton(grid.transform, p.colorName, uiFont, null, new Vector2(180, 100), p.color, Color.black, showLabel: false);
+                btn.gameObject.AddComponent<HoverHighlight>();
                 buttons.Add(btn);
             }
         }
@@ -229,230 +236,85 @@ public class Bootstrap : MonoBehaviour
         lockTask.BindAreaMap(areaIndicatorGroups);
     }
 
-    // 「You」を中心としたドーナツ状の俯瞰図．正面は広い1つの扇形（視野内），
-    // 左右はそれぞれ内側/外側の2バンド×上/下の2半分＝計4セルの扇形（視野外）とする．
-    // 扇形はUnity標準のImage Radial Fill（実行時生成したリング画像）で描画するため，
-    // 独自メッシュに依存せず確実に表示される．
-    // 角度は数学の慣例通り，0°=右，90°=真上（＝正面），180°=左とする．
-    // 描画順：扇形（塗り）→境界線（扇形の上）→ラベル（一番上，常に読める）→中心のYou円．
-    private void BuildAreaSpatialMap(Transform parent, List<List<Image>> indicatorGroups)
+    // 添付の構成図通りの図．左視野外（平行四辺形，エリア1-4）・正面（FOVとだけ表示）・
+    // 右視野外（平行四辺形，エリア5-8）を横並びに配置し，中央下に参加者（You）アイコンを置く．
+    // 写真は使わず，番号付きの単色セルで表示する．見ていない側を暗くする処理は行わない
+    // （暗くする処理は右のHMD画面図でのみ行う）．
+    // 戻り値：この図が実際に必要とする(幅,高さ)．呼び出し側でDiagramsRow全体のサイズを
+    // 過不足なく確保し，隣（HMD画面図）との重なりを防ぐために使う．
+    private Vector2 BuildRoomViewDiagram(Transform parent, List<List<Image>> indicatorGroups)
     {
-        const float youRadius = 47f;
-        const float innerBandOuterRadius = 127f;
-        const float outerBandOuterRadius = 210f;
-        const float forwardHalfWidth = 40f; // 正面の扇は幅80°（50°〜130°）
-        const float sideHalfWidth = 70f;    // 左右の合計角度（140°）の半分．隙間を含めた枠の大きさ
-        const float backGapHalfWidth = 32f; // Youの真後ろ（270°）に設ける隙間の半分（合計32°空ける）
-        // 隙間の分を上下で均等に差し引き，8エリアすべてを同じ幅にする．
-        const float cellWidth = sideHalfWidth - backGapHalfWidth / 2f;
+        const float windowWidth = 220f;
+        const float centerWidth = 300f;
+        const float panelHeight = 220f;
+        const float panelSpacing = 28f;
+        // 左右の辺（手前・奥）はどちらもこの比率の高さのまま＝長さが同じ．正面の辺と同じ長さに
+        // なるよう，窓全体の高さから逆算する．
+        const float sideHeightFraction = 0.7f;
+        // 手前側ほど中心を上へ，奥側ほど下へずらす量．これにより上下の辺が斜め・平行になる．
+        const float shearFraction = 0.3f;
+        float windowHeight = panelHeight / sideHeightFraction;
+        float rowHeight = Mathf.Max(windowHeight, panelHeight);
+        // 左右の図を少し下にずらし，正面の図の位置に視覚的に合わせる．
+        const float sideWindowVerticalOffset = 60f;
 
-        // 各セル位置に実際に割り当てるareaId（0始まり，表示番号は+1）．
-        // 位置：Outer=Youから遠い／Inner=近い，Upper=正面寄り／Lower=背面寄り．
-        const int leftOuterUpperAreaId = 1;  // 表示「2」
-        const int leftInnerUpperAreaId = 3;  // 表示「4」
-        const int leftOuterLowerAreaId = 0;  // 表示「1」
-        const int leftInnerLowerAreaId = 2;  // 表示「3」
-        const int rightOuterUpperAreaId = 4; // 表示「5」
-        const int rightInnerUpperAreaId = 6; // 表示「7」
-        const int rightOuterLowerAreaId = 5; // 表示「6」
-        const int rightInnerLowerAreaId = 7; // 表示「8」
+        var column = new GameObject("RoomViewDiagram", typeof(RectTransform));
+        column.transform.SetParent(parent, false);
+        var columnVl = column.AddComponent<VerticalLayoutGroup>();
+        columnVl.childAlignment = TextAnchor.MiddleCenter;
+        columnVl.spacing = 16;
+        columnVl.childControlWidth = true;
+        columnVl.childControlHeight = true;
+        columnVl.childForceExpandWidth = false;
+        columnVl.childForceExpandHeight = false;
+        float totalWidth = windowWidth * 2f + centerWidth + panelSpacing * 2f;
+        float totalHeight = rowHeight + 110f;
+        var columnLe = column.AddComponent<LayoutElement>();
+        columnLe.preferredWidth = totalWidth;
+        columnLe.preferredHeight = totalHeight;
 
-        var mapContainer = new GameObject("SpatialMap", typeof(RectTransform));
-        mapContainer.transform.SetParent(parent, false);
-        var containerSize = new Vector2(outerBandOuterRadius * 2f, outerBandOuterRadius * 2f);
-        var containerRect = mapContainer.GetComponent<RectTransform>();
-        containerRect.sizeDelta = containerSize;
-        var containerLe = mapContainer.AddComponent<LayoutElement>();
-        containerLe.preferredWidth = containerSize.x;
-        containerLe.preferredHeight = containerSize.y;
+        var row = new GameObject("PanelsRow", typeof(RectTransform));
+        row.transform.SetParent(column.transform, false);
+        var rowHl = row.AddComponent<HorizontalLayoutGroup>();
+        rowHl.spacing = panelSpacing;
+        rowHl.childAlignment = TextAnchor.MiddleCenter;
+        rowHl.childControlWidth = true;
+        rowHl.childControlHeight = true;
+        rowHl.childForceExpandWidth = false;
+        rowHl.childForceExpandHeight = false;
+        var rowLe = row.AddComponent<LayoutElement>();
+        rowLe.preferredWidth = totalWidth;
+        rowLe.preferredHeight = rowHeight;
 
-        var forwardRingSprite = CreateRingSprite(youRadius / outerBandOuterRadius);
-        var innerBandRingSprite = CreateRingSprite(youRadius / innerBandOuterRadius);
-        var outerBandRingSprite = CreateRingSprite(innerBandOuterRadius / outerBandOuterRadius);
+        // 左視野外の窓（エリア1-4）．左右の辺は正面の辺と同じ長さのまま，上下の辺を斜め・平行にする．
+        CreateParallelogramGrid(row.transform, windowWidth, windowHeight, rowHeight, sideWindowVerticalOffset, nearEdgeOnRight: true, sideHeightFraction, shearFraction, new[] { 0, 1, 2, 3 }, indicatorGroups);
 
-        var forwardColor = new Color(0.3f, 0.6f, 1.0f, 0.95f);
-        var peripheralDefaultColor = new Color(0.5f, 0.5f, 0.55f, 0.9f);
-        var boundaryColor = new Color(0.05f, 0.05f, 0.07f, 1f);
+        // 正面（"HMD Screen"とだけ表示，装飾のみ・ハイライト対象外）．
+        var centerFrame = CreatePanelFrame(row.transform, centerWidth, panelHeight);
+        var fovText = UIFactory.CreateText(centerFrame, "HMD Screen", 32, uiFont, new Color(0.8f, 0.8f, 0.8f));
+        StretchLabel(fovText);
 
-        float leftStart = 90f + forwardHalfWidth;
-        float leftUpperStart = leftStart;
-        float leftLowerStart = leftStart + cellWidth;
-        float rightStart = 90f - forwardHalfWidth - sideHalfWidth * 2f;
-        float rightLowerStart = rightStart + backGapHalfWidth;
-        float rightUpperStart = rightLowerStart + cellWidth;
+        // 右視野外の窓（エリア5-8）．左と左右対称．
+        CreateParallelogramGrid(row.transform, windowWidth, windowHeight, rowHeight, sideWindowVerticalOffset, nearEdgeOnRight: false, sideHeightFraction, shearFraction, new[] { 4, 5, 6, 7 }, indicatorGroups);
 
-        // 1. 扇形（塗り）．正面＋左右各4セル．8セルはすべて同じ幅(cellWidth)．
-        // 左のLowerセルの終端から右のLowerセルの始端までが隙間（backGapHalfWidth×2）になる．
-        CreateRingWedge(mapContainer.transform, forwardRingSprite, outerBandOuterRadius * 2f, 90f - forwardHalfWidth, forwardHalfWidth * 2f, forwardColor);
-
-        indicatorGroups[leftOuterUpperAreaId].Add(CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, leftUpperStart, cellWidth, peripheralDefaultColor));
-        indicatorGroups[leftInnerUpperAreaId].Add(CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, leftUpperStart, cellWidth, peripheralDefaultColor));
-        indicatorGroups[leftOuterLowerAreaId].Add(CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, leftLowerStart, cellWidth, peripheralDefaultColor));
-        indicatorGroups[leftInnerLowerAreaId].Add(CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, leftLowerStart, cellWidth, peripheralDefaultColor));
-
-        indicatorGroups[rightOuterUpperAreaId].Add(CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, rightUpperStart, cellWidth, peripheralDefaultColor));
-        indicatorGroups[rightInnerUpperAreaId].Add(CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, rightUpperStart, cellWidth, peripheralDefaultColor));
-        indicatorGroups[rightOuterLowerAreaId].Add(CreateRingWedge(mapContainer.transform, outerBandRingSprite, outerBandOuterRadius * 2f, rightLowerStart, cellWidth, peripheralDefaultColor));
-        indicatorGroups[rightInnerLowerAreaId].Add(CreateRingWedge(mapContainer.transform, innerBandRingSprite, innerBandOuterRadius * 2f, rightLowerStart, cellWidth, peripheralDefaultColor));
-
-        // 2. 境界線．放射状の直線（4本：正面と左右，左右それぞれの上下境界）と，
-        // 内側/外側バンドの境界を示す円弧（左右それぞれ，背面の隙間を避けて描く）．扇形の上に重ねて描く．
-        // 背面（270°）には隙間があるため，その位置には境界線を引かない．
-        const float lineThickness = 5f;
-        foreach (var angle in new[] { 90f - forwardHalfWidth, 90f + forwardHalfWidth, leftLowerStart, rightUpperStart })
-        {
-            CreateRadialBoundaryLine(mapContainer.transform, angle, youRadius, outerBandOuterRadius, lineThickness, boundaryColor);
-        }
-
-        const float bandBoundaryHalfThickness = 4f;
-        float bandBoundaryDiameter = (innerBandOuterRadius + bandBoundaryHalfThickness) * 2f;
-        var bandBoundarySprite = CreateRingSprite((innerBandOuterRadius - bandBoundaryHalfThickness) / (innerBandOuterRadius + bandBoundaryHalfThickness));
-        CreateRingWedge(mapContainer.transform, bandBoundarySprite, bandBoundaryDiameter, leftStart, cellWidth * 2f, boundaryColor);
-        CreateRingWedge(mapContainer.transform, bandBoundarySprite, bandBoundaryDiameter, rightLowerStart, cellWidth * 2f, boundaryColor);
-
-        // 3. ラベル．境界線よりさらに上に描くことで，線に隠れず常に読めるようにする．
-        // 表示番号は必ず「そのセルに実際に割り当てたareaId+1」から生成し，表示と実データがずれないようにする．
-        // HMD画面図のセル番号（26pt）に合わせる．
-        const int labelFontSize = 26;
-        var labelHolderSize = new Vector2(70, 50);
-
-        CreateWedgeLabel(mapContainer.transform, "Forward", (youRadius + outerBandOuterRadius) / 2f, 90f, labelFontSize, new Vector2(140, 50));
-
-        float innerLabelRadius = (youRadius + innerBandOuterRadius) / 2f;
-        float outerLabelRadius = (innerBandOuterRadius + outerBandOuterRadius) / 2f;
-
-        CreateWedgeLabel(mapContainer.transform, (leftOuterUpperAreaId + 1).ToString(), outerLabelRadius, leftUpperStart + cellWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (leftInnerUpperAreaId + 1).ToString(), innerLabelRadius, leftUpperStart + cellWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (leftOuterLowerAreaId + 1).ToString(), outerLabelRadius, leftLowerStart + cellWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (leftInnerLowerAreaId + 1).ToString(), innerLabelRadius, leftLowerStart + cellWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (rightOuterUpperAreaId + 1).ToString(), outerLabelRadius, rightUpperStart + cellWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (rightInnerUpperAreaId + 1).ToString(), innerLabelRadius, rightUpperStart + cellWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (rightOuterLowerAreaId + 1).ToString(), outerLabelRadius, rightLowerStart + cellWidth / 2f, labelFontSize, labelHolderSize);
-        CreateWedgeLabel(mapContainer.transform, (rightInnerLowerAreaId + 1).ToString(), innerLabelRadius, rightLowerStart + cellWidth / 2f, labelFontSize, labelHolderSize);
-
-        // 4. 参加者（You）アイコン．周囲の扇形に合わせて円形にする（ラベルより上＝最前面）．
-        var head = CreateMapChild(mapContainer.transform, "Head", Vector2.zero, new Vector2(youRadius * 2f, youRadius * 2f));
-        var headImg = head.gameObject.AddComponent<Image>();
-        headImg.sprite = CreateRingSprite(0f);
-        headImg.color = new Color(0.85f, 0.85f, 0.85f);
-        StretchLabel(UIFactory.CreateText(head, "You", 24, uiFont, Color.black));
-    }
-
-    // fromRadiusからtoRadiusまで，angleDeg方向に伸びる直線境界線を描画する．
-    private void CreateRadialBoundaryLine(Transform parent, float angleDeg, float fromRadius, float toRadius, float thickness, Color color)
-    {
-        float rad = angleDeg * Mathf.Deg2Rad;
-        var dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
-        var from = dir * fromRadius;
-        var to = dir * toRadius;
-        var mid = (from + to) / 2f;
-
-        var rect = CreateMapChild(parent, "Boundary", mid, new Vector2(toRadius - fromRadius, thickness));
-        rect.localRotation = Quaternion.Euler(0f, 0f, angleDeg);
-
-        var img = rect.gameObject.AddComponent<Image>();
-        img.color = color;
-        img.raycastTarget = false;
-    }
-
-    // 中心が半径innerNormalized(0〜1)〜1.0の範囲だけ不透明なリング（ドーナツ）状のスプライトを
-    // 実行時に生成する．innerNormalized=0なら塗りつぶした円になる．
-    // Image.Type.Filled + Radial360と組み合わせることで扇形の一部だけを表示できる．
-    private Sprite CreateRingSprite(float innerNormalized)
-    {
-        const int size = 128;
-        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        tex.wrapMode = TextureWrapMode.Clamp;
-        var center = new Vector2(size / 2f, size / 2f);
-        float maxDist = size / 2f;
-
-        for (int y = 0; y < size; y++)
-        {
-            for (int x = 0; x < size; x++)
-            {
-                float dist = Vector2.Distance(new Vector2(x + 0.5f, y + 0.5f), center) / maxDist;
-                bool inside = dist >= innerNormalized && dist <= 1f;
-                tex.SetPixel(x, y, inside ? Color.white : new Color(1f, 1f, 1f, 0f));
-            }
-        }
-        tex.Apply();
-
-        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f));
-    }
-
-    // ringSpriteをRadial360で扇形に切り出して表示する．startAngleDegから反時計回りにwidthDeg分だけ塗りつぶす．
-    private Image CreateRingWedge(Transform parent, Sprite ringSprite, float diameter, float startAngleDeg, float widthDeg, Color color)
-    {
-        var rect = CreateMapChild(parent, "Wedge", Vector2.zero, new Vector2(diameter, diameter));
-
-        var img = rect.gameObject.AddComponent<Image>();
-        img.sprite = ringSprite;
-        img.color = color;
-        img.type = Image.Type.Filled;
-        img.fillMethod = Image.FillMethod.Radial360;
-        img.fillOrigin = (int)Image.Origin360.Top;
-        img.fillClockwise = false;
-        img.fillAmount = Mathf.Clamp01(widthDeg / 360f);
-        img.raycastTarget = false;
-
-        // fillOrigin=Top（ローカルの真上＝90°）を起点に反時計回りで塗るため，
-        // 起点をstartAngleDegに合わせるにはオブジェクト自体を(startAngleDeg-90)度回転させる．
-        rect.localRotation = Quaternion.Euler(0f, 0f, startAngleDeg - 90f);
-
-        return img;
-    }
-
-    // 俯瞰図内で絶対配置する子要素を作る（中心ピボット，anchoredPositionで配置）．
-    private RectTransform CreateMapChild(Transform parent, string name, Vector2 anchoredPos, Vector2 size)
-    {
-        var go = new GameObject(name, typeof(RectTransform));
-        go.transform.SetParent(parent, false);
-
-        var rect = go.GetComponent<RectTransform>();
-        rect.anchorMin = new Vector2(0.5f, 0.5f);
-        rect.anchorMax = new Vector2(0.5f, 0.5f);
-        rect.pivot = new Vector2(0.5f, 0.5f);
-        rect.sizeDelta = size;
-        rect.anchoredPosition = anchoredPos;
-
-        return rect;
-    }
-
-    // 極座標(radius, angleDeg)の位置にラベルを配置する．
-    private void CreateWedgeLabel(Transform parent, string label, float radius, float angleDeg, int fontSize, Vector2 holderSize)
-    {
-        float rad = angleDeg * Mathf.Deg2Rad;
-        var pos = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad)) * radius;
-
-        var holder = CreateMapChild(parent, "Label", pos, holderSize);
-        var text = UIFactory.CreateText(holder, label, fontSize, uiFont, Color.white);
-        StretchLabel(text);
-    }
-
-    // ラベル用テキストを親いっぱいに引き伸ばす（CreateTextが付与するLayoutElementは，
-    // 絶対配置のコンテナ内では不要かつ無害だが，見た目のため破棄しておく）．
-    private void StretchLabel(TextMeshProUGUI text)
-    {
-        var le = text.GetComponent<LayoutElement>();
-        if (le != null) Object.Destroy(le);
-
-        var rect = text.GetComponent<RectTransform>();
-        rect.anchorMin = Vector2.zero;
-        rect.anchorMax = Vector2.one;
-        rect.offsetMin = Vector2.zero;
-        rect.offsetMax = Vector2.zero;
+        return new Vector2(totalWidth, totalHeight);
     }
 
     // HMD画面をそのまま模した図．画面の左上に左視野外映像（エリア1-4），右上に右視野外映像
-    // （エリア5-8）の2x2グリッドを重ねて表示する．俯瞰図（リング）と同じareaIdを
-    // indicatorGroupsに登録することで，同じエリアを両方の図で同時にハイライトできる．
-    private void BuildHmdScreenDiagram(Transform parent, List<List<Image>> indicatorGroups, LockTaskController lockTask)
+    // （エリア5-8）の2x2グリッドを重ねて表示する．部屋ビュー図と同じareaIdをindicatorGroupsに
+    // 登録することで，同じエリアを両方の図で同時にハイライトできる．
+    // こちらの図でのみ，見ていない側を暗く表示する．
+    // 戻り値：この図が実際に必要とする(幅,高さ)．呼び出し側でDiagramsRow全体のサイズを
+    // 過不足なく確保し，隣（部屋ビュー図）との重なりを防ぐために使う．
+    private Vector2 BuildHmdScreenDiagram(Transform parent, List<List<Image>> indicatorGroups, LockTaskController lockTask)
     {
         const float screenWidth = 480f;
         const float screenHeight = 300f;
         const float cellSize = 70f;
         const float cellSpacing = 8f;
         const float marginFromEdge = 16f;
+        float columnWidth = screenWidth + 40f;
+        float columnHeight = screenHeight + 80f;
 
         var column = new GameObject("HmdScreenDiagram", typeof(RectTransform));
         column.transform.SetParent(parent, false);
@@ -464,8 +326,8 @@ public class Bootstrap : MonoBehaviour
         vl.childForceExpandWidth = false;
         vl.childForceExpandHeight = false;
         var columnLe = column.AddComponent<LayoutElement>();
-        columnLe.preferredWidth = screenWidth + 40f;
-        columnLe.preferredHeight = screenHeight + 80f;
+        columnLe.preferredWidth = columnWidth;
+        columnLe.preferredHeight = columnHeight;
 
         UIFactory.CreateText(column.transform, "HMD Screen", 24, uiFont, new Color(0.8f, 0.8f, 0.8f));
 
@@ -481,24 +343,23 @@ public class Bootstrap : MonoBehaviour
         inner.gameObject.AddComponent<Image>().color = new Color(0.08f, 0.08f, 0.1f);
 
         float halfWidth = (screenWidth - 12f) / 2f;
-        float halfHeight = (screenHeight - 12f) / 2f;
         float halfGrid = (cellSize * 2f + cellSpacing) / 2f;
 
         // 縦位置はHMDスクリーンの中央（y=0）に揃え，横方向だけ左右に振り分ける．
         var leftGridCenter = new Vector2(-halfWidth + marginFromEdge + halfGrid, 0f);
         var rightGridCenter = new Vector2(halfWidth - marginFromEdge - halfGrid, 0f);
 
-        // 左視野外の映像（エリア1-4）：左上・右上・左下・右下の順．
         var leftCells = CreatePeripheralGrid(inner, leftGridCenter, cellSize, cellSpacing, new[] { 0, 1, 2, 3 }, indicatorGroups);
-        // 右視野外の映像（エリア5-8）．左右の対応について指定が無かったため，左と同じ並び順で仮に割り当てる．
         var rightCells = CreatePeripheralGrid(inner, rightGridCenter, cellSize, cellSpacing, new[] { 4, 5, 6, 7 }, indicatorGroups);
 
-        // 見るべきエリアが左右どちらかにある間，反対側のグリッドは非アクティブ（暗く）表示する．
+        // スクリーン図でのみ，見ていない側を暗くする．
         lockTask.BindHmdScreenSides(leftCells, rightCells);
+
+        return new Vector2(columnWidth, columnHeight);
     }
 
-    // centerPosを中心に，2x2のエリアアイコンをグリッド状に配置し，生成したセルの一覧を返す．
-    // areaIdsTLTRBLBRは左上・右上・左下・右下の順でareaIdを指定する．
+    // centerPosを中心に，2x2のエリアアイコン（番号付き単色セル）をグリッド状に配置し，
+    // 生成したセルの一覧を返す．areaIdsTLTRBLBRは左上・右上・左下・右下の順でareaIdを指定する．
     private List<Image> CreatePeripheralGrid(Transform parent, Vector2 centerPos, float cellSize, float spacing, int[] areaIdsTLTRBLBR, List<List<Image>> indicatorGroups)
     {
         float gridSize = cellSize * 2f + spacing;
@@ -521,7 +382,8 @@ public class Bootstrap : MonoBehaviour
         return cells;
     }
 
-    // HMD画面図用の単純な番号付きセル（クリック不可）．
+    // エリアアイコン用の単色セル（クリック不可）．エリア番号は表示しない
+    // （labelはGameObject名の識別にのみ使用）．
     private Image CreateScreenCell(Transform parent, string label, Vector2 size)
     {
         var go = new GameObject(label + "Cell", typeof(RectTransform), typeof(Image));
@@ -533,13 +395,163 @@ public class Bootstrap : MonoBehaviour
         le.preferredWidth = size.x;
         le.preferredHeight = size.y;
 
-        var img = go.GetComponent<Image>();
-        img.color = new Color(0.3f, 0.3f, 0.35f);
+        go.GetComponent<Image>().color = Color.white;
 
-        var text = UIFactory.CreateText(go.transform, label, 26, uiFont, Color.white);
-        StretchLabel(text);
+        return go.GetComponent<Image>();
+    }
 
-        return img;
+    // 固定サイズの縁取り付きパネル（フレーム＋内側コンテンツ領域）を作り，内側のTransformを返す．
+    private Transform CreatePanelFrame(Transform parent, float width, float height)
+    {
+        var frame = new GameObject("PanelFrame", typeof(RectTransform), typeof(Image));
+        frame.transform.SetParent(parent, false);
+        frame.GetComponent<RectTransform>().sizeDelta = new Vector2(width, height);
+        var le = frame.AddComponent<LayoutElement>();
+        le.preferredWidth = width;
+        le.preferredHeight = height;
+        frame.GetComponent<Image>().color = new Color(0.55f, 0.55f, 0.6f);
+
+        var inner = CreateMapChild(frame.transform, "Content", Vector2.zero, new Vector2(width - 8f, height - 8f));
+        inner.gameObject.AddComponent<Image>().color = new Color(0.08f, 0.08f, 0.1f);
+
+        return inner;
+    }
+
+    // widthxheightの平行四辺形の窓（左右の辺の長さは不変，上下の辺だけ斜め・互いに平行）の中に，
+    // 中心の縦線（左右分割）と，上下の辺に平行な斜めの境界線（上下分割）の2本で4分割した，
+    // 番号付きの単色セルを配置する（areaIdsTLTRBLBRは左上・右上・左下・右下の順）．
+    // 各セルは縦横ともに窓いっぱいの大きさのまま作り，外枠の斜め境界＋斜めの分割線の判定を
+    // 1枚のマスクスプライトで表現する（セル自体の矩形を上下半分に区切ってしまうと，分割線が
+    // 斜めにずれている部分でどちらのセルにも属さない隙間ができてしまうため，セルの矩形は
+    // あえて窓いっぱいのままにし，マスクの判定だけで4分割を表現している）．
+    // 分割線を見やすくするため，中心の縦線と斜めの境界線を実際に描画する．
+    // verticalOffsetで窓全体を上下にずらせる（正面の図の位置に視覚的に合わせるため）．
+    // 戻り値は生成した4つのセル（ハイライト対象）．
+    private List<Image> CreateParallelogramGrid(Transform parent, float width, float height, float slotHeight, float verticalOffset, bool nearEdgeOnRight, float heightFraction, float shearFraction, int[] areaIdsTLTRBLBR, List<List<Image>> indicatorGroups)
+    {
+        // Horizontal/VerticalLayoutGroupの子は位置を自動制御されるため，位置を手動でずらせるよう
+        // レイアウト対象の「スロット」と，実際に描画する「窓」を分離する．
+        var slot = new GameObject("WindowSlot", typeof(RectTransform));
+        slot.transform.SetParent(parent, false);
+        var slotLe = slot.AddComponent<LayoutElement>();
+        slotLe.preferredWidth = width;
+        slotLe.preferredHeight = slotHeight;
+
+        var window = CreateMapChild(slot.transform, "ParallelogramWindow", new Vector2(0f, -verticalOffset), new Vector2(width, height));
+
+        var cells = new List<Image>();
+
+        var cellTL = CreateParallelogramQuadrantCell(window, width, height, nearEdgeOnRight, heightFraction, shearFraction, isLeftHalf: true, isTopHalf: true, (areaIdsTLTRBLBR[0] + 1).ToString());
+        indicatorGroups[areaIdsTLTRBLBR[0]].Add(cellTL);
+        cells.Add(cellTL);
+
+        var cellTR = CreateParallelogramQuadrantCell(window, width, height, nearEdgeOnRight, heightFraction, shearFraction, isLeftHalf: false, isTopHalf: true, (areaIdsTLTRBLBR[1] + 1).ToString());
+        indicatorGroups[areaIdsTLTRBLBR[1]].Add(cellTR);
+        cells.Add(cellTR);
+
+        var cellBL = CreateParallelogramQuadrantCell(window, width, height, nearEdgeOnRight, heightFraction, shearFraction, isLeftHalf: true, isTopHalf: false, (areaIdsTLTRBLBR[2] + 1).ToString());
+        indicatorGroups[areaIdsTLTRBLBR[2]].Add(cellBL);
+        cells.Add(cellBL);
+
+        var cellBR = CreateParallelogramQuadrantCell(window, width, height, nearEdgeOnRight, heightFraction, shearFraction, isLeftHalf: false, isTopHalf: false, (areaIdsTLTRBLBR[3] + 1).ToString());
+        indicatorGroups[areaIdsTLTRBLBR[3]].Add(cellBR);
+        cells.Add(cellBR);
+
+        // 中心の縦線（左右分割）．窓の中心を通る，まっすぐな縦線．
+        var vLine = CreateMapChild(window, "DividerVertical", Vector2.zero, new Vector2(3f, height));
+        vLine.gameObject.AddComponent<Image>().color = new Color(0.1f, 0.1f, 0.12f);
+
+        // 斜めの境界線（上下分割）．窓の上下の辺と同じ傾きで，窓の中心を通る．
+        float slope = (shearFraction * height) / width;
+        float signedSlope = nearEdgeOnRight ? slope : -slope;
+        float angleDeg = Mathf.Atan(signedSlope) * Mathf.Rad2Deg;
+        float lineLength = width / Mathf.Cos(angleDeg * Mathf.Deg2Rad) * 1.05f; // 端まで届くよう少し余裕を持たせる
+        var dLine = CreateMapChild(window, "DividerDiagonal", Vector2.zero, new Vector2(lineLength, 3f));
+        dLine.localRotation = Quaternion.Euler(0f, 0f, angleDeg);
+        dLine.gameObject.AddComponent<Image>().color = new Color(0.1f, 0.1f, 0.12f);
+
+        return cells;
+    }
+
+    // 窓(windowWidth x windowHeight)のうち，isLeftHalf（中心の縦線による左右分割）と
+    // isTopHalf（斜めの境界線による上下分割）で指定される1/4だけを示すセルを配置する．
+    // セル自体の矩形は窓いっぱいの大きさのまま作り，マスクのアルファ判定だけで該当する1/4を表示する．
+    // エリア番号は表示しない（labelはGameObject名の識別にのみ使用）．
+    private Image CreateParallelogramQuadrantCell(Transform parent, float windowWidth, float windowHeight, bool nearEdgeOnRight, float heightFraction, float shearFraction, bool isLeftHalf, bool isTopHalf, string label)
+    {
+        var cellRect = CreateMapChild(parent, label + "Cell", Vector2.zero, new Vector2(windowWidth, windowHeight));
+
+        var maskImg = cellRect.gameObject.AddComponent<Image>();
+        maskImg.sprite = CreateParallelogramQuadrantSprite(nearEdgeOnRight, heightFraction, shearFraction, isLeftHalf, isTopHalf);
+        maskImg.color = Color.white;
+        var mask = cellRect.gameObject.AddComponent<Mask>();
+        mask.showMaskGraphic = true; // マスク画像自体がそのままセルの見た目（非選択時は白）になる
+
+        return maskImg;
+    }
+
+    // 1/4セル用のアルファマスクを生成する．外枠の斜め境界判定（nearEdgeOnRight／heightFraction／
+    // shearFraction，窓全体と同じ計算式）と，中心の斜め境界線による上下判定の両方をこの1枚に
+    // まとめることで，セルの矩形自体を分割しなくても正しく1/4だけを表示できる．
+    private Sprite CreateParallelogramQuadrantSprite(bool nearEdgeOnRight, float heightFraction, float shearFraction, bool isLeftHalf, bool isTopHalf)
+    {
+        const int size = 128;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        tex.wrapMode = TextureWrapMode.Clamp;
+
+        for (int px = 0; px < size; px++)
+        {
+            float xNorm = (px + 0.5f) / size; // 窓全体でのx(0〜1)
+            bool inLeftHalf = xNorm < 0.5f;
+
+            float t = nearEdgeOnRight ? xNorm : (1f - xNorm); // 0=奥側，1=手前（near）側
+            float center = 0.5f + (t - 0.5f) * shearFraction;
+
+            for (int py = 0; py < size; py++)
+            {
+                float yNorm = (py + 0.5f) / size; // 窓全体でのy(0〜1)
+
+                bool insideOuter = Mathf.Abs(yNorm - center) <= heightFraction / 2f;
+                bool insideHalf = isTopHalf ? (yNorm >= center) : (yNorm < center);
+                bool insideSide = isLeftHalf ? inLeftHalf : !inLeftHalf;
+                bool inside = insideOuter && insideHalf && insideSide;
+
+                tex.SetPixel(px, py, inside ? Color.white : new Color(1f, 1f, 1f, 0f));
+            }
+        }
+        tex.Apply();
+
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f));
+    }
+
+    // ラベル用テキストを親いっぱいに引き伸ばす（CreateTextが付与するLayoutElementは，
+    // 絶対配置のコンテナ内では不要かつ無害だが，見た目のため破棄しておく）．
+    private void StretchLabel(TextMeshProUGUI text)
+    {
+        var le = text.GetComponent<LayoutElement>();
+        if (le != null) Object.Destroy(le);
+
+        var rect = text.GetComponent<RectTransform>();
+        rect.anchorMin = Vector2.zero;
+        rect.anchorMax = Vector2.one;
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+    }
+
+    // 俯瞰図内で絶対配置する子要素を作る（中心ピボット，anchoredPositionで配置）．
+    private RectTransform CreateMapChild(Transform parent, string name, Vector2 anchoredPos, Vector2 size)
+    {
+        var go = new GameObject(name, typeof(RectTransform));
+        go.transform.SetParent(parent, false);
+
+        var rect = go.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.sizeDelta = size;
+        rect.anchoredPosition = anchoredPos;
+
+        return rect;
     }
 
     private void BuildPracticeTransitionPanel(Transform parent, ExperimentSessionController session)
