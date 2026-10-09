@@ -255,23 +255,29 @@ public class Bootstrap : MonoBehaviour
         const float shearFraction = 0.3f;
         float windowHeight = panelHeight / sideHeightFraction;
         float rowHeight = Mathf.Max(windowHeight, panelHeight);
-        // 左右の図を少し下にずらし，正面の図の位置に視覚的に合わせる．
-        const float sideWindowVerticalOffset = 60f;
+        // 左右の図をもう少し上にずらす．
+        const float sideWindowVerticalOffset = 50f;
+        float totalWidth = windowWidth * 2f + centerWidth + panelSpacing * 2f;
+        float totalHeight = rowHeight + 110f;
+        // 俯瞰図全体をもう少し上にずらす．
+        const float diagramVerticalOffset = 35f;
 
-        var column = new GameObject("RoomViewDiagram", typeof(RectTransform));
-        column.transform.SetParent(parent, false);
-        var columnVl = column.AddComponent<VerticalLayoutGroup>();
+        // HorizontalLayoutGroup（diagramsRow）の子は位置を自動制御されるため，位置を手動で
+        // ずらせるよう，レイアウト対象の「スロット」と，実際に描画する「図」を分離する．
+        var slot = new GameObject("RoomViewDiagramSlot", typeof(RectTransform));
+        slot.transform.SetParent(parent, false);
+        var slotLe = slot.AddComponent<LayoutElement>();
+        slotLe.preferredWidth = totalWidth;
+        slotLe.preferredHeight = totalHeight;
+
+        var column = CreateMapChild(slot.transform, "RoomViewDiagram", new Vector2(0f, diagramVerticalOffset), new Vector2(totalWidth, totalHeight));
+        var columnVl = column.gameObject.AddComponent<VerticalLayoutGroup>();
         columnVl.childAlignment = TextAnchor.MiddleCenter;
         columnVl.spacing = 16;
         columnVl.childControlWidth = true;
         columnVl.childControlHeight = true;
         columnVl.childForceExpandWidth = false;
         columnVl.childForceExpandHeight = false;
-        float totalWidth = windowWidth * 2f + centerWidth + panelSpacing * 2f;
-        float totalHeight = rowHeight + 110f;
-        var columnLe = column.AddComponent<LayoutElement>();
-        columnLe.preferredWidth = totalWidth;
-        columnLe.preferredHeight = totalHeight;
 
         var row = new GameObject("PanelsRow", typeof(RectTransform));
         row.transform.SetParent(column.transform, false);
