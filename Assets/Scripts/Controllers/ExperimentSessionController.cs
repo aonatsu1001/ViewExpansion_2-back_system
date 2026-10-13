@@ -77,8 +77,9 @@ public class ExperimentSessionController : MonoBehaviour
             twoBackPanel.SetActive(false);
             phase = Phase.PracticeLock;
             lockPanel.SetActive(true);
-            int areaId = activeSequence.areaVisitOrder[0];
-            lockTask.BeginTrial(trialIndex: 0, areaId, isPractice: true);
+            // 練習時はエリア0（正解色が赤に固定されているエリア）を使い，選択したSequenceSetに
+            // よらず練習の正解色が常に赤になるようにする．
+            lockTask.BeginTrial(trialIndex: 0, areaId: 0, isPractice: true);
         }
         else if (phase == Phase.PracticeTwoBackAfterLock)
         {

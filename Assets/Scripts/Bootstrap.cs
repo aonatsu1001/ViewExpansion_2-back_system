@@ -221,15 +221,24 @@ public class Bootstrap : MonoBehaviour
         gridLe.preferredWidth = 820;
         gridLe.preferredHeight = 220;
 
+        // 選択肢の見た目の並びをパレット順から変える（決め打ち．ランダム化はしない）．
+        // buttons[i]はパレットのインデックスiに対応させたまま，グリッド上の表示位置だけを
+        // displayOrderの順にする．
+        int[] displayOrder = { 5, 1, 6, 3, 0, 7, 2, 4 };
+
         var buttons = new List<Button>();
         if (areaColorConfig != null && areaColorConfig.palette != null)
         {
-            foreach (var p in areaColorConfig.palette)
+            var paletteButtons = new Button[areaColorConfig.palette.Length];
+            foreach (int paletteIndex in displayOrder)
             {
+                if (paletteIndex < 0 || paletteIndex >= areaColorConfig.palette.Length) continue;
+                var p = areaColorConfig.palette[paletteIndex];
                 var btn = UIFactory.CreateButton(grid.transform, p.colorName, uiFont, null, new Vector2(180, 100), p.color, Color.black, showLabel: false);
                 btn.gameObject.AddComponent<HoverHighlight>();
-                buttons.Add(btn);
+                paletteButtons[paletteIndex] = btn;
             }
+            buttons.AddRange(paletteButtons);
         }
 
         lockTask.Bind(instruction, buttons, areaColorConfig);
